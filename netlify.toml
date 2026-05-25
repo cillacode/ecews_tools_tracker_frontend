@@ -1,0 +1,13 @@
+# Netlify build + routing configuration.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Single-page app routing: every URL (e.g. /dashboard, /facilities/12) is
+# served by index.html so React Router can handle the path client-side.
+# Without this, refreshing or sharing a deep link 404s.
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200

@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* CSS variables — keep colours in sync with tailwind.config.js for any
+     edge case where we need raw CSS (e.g. shadow hover states). */
+  :root {
+    --brand-700: #15803D;
+    --brand-900: #14532D;
+    --accent-700: #B45309;
+    --surface: #FAFAF9;
+    --ink: #0F172A;
+    --line: #E7E5E4;
+  }
+
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface text-ink antialiased;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    font-feature-settings: 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Headings use the same sans by default; we opt into serif on a per-element
+     basis for the brand mark and large stat numbers. */
+  h1, h2, h3, h4 {
+    @apply tracking-tight text-ink;
+  }
+
+  /* Tabular figures for any number that lives in a table or stat. */
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Refined focus ring used everywhere for a11y. */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-brand-700 ring-offset-2 ring-offset-surface;
+  }
+}
+
+@layer components {
+  /* Subtle paper-grain texture for the login page background only.
+     Atmosphere without taking attention away from the form. */
+  .bg-paper {
+    background-color: var(--surface);
+    background-image:
+      radial-gradient(at 20% 0%,   rgba(20, 83, 45, 0.06) 0,  transparent 50%),
+      radial-gradient(at 80% 100%, rgba(180, 83, 9, 0.05) 0,  transparent 50%);
+  }
+
+  /* Hairline divider with an optional gold tick — used for section breaks. */
+  .rule {
+    @apply h-px w-full bg-line;
+  }
+
+  /* Pill-shaped status badge base. Variants applied via additional classes. */
+  .pill {
+    @apply inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium;
+  }
+}
