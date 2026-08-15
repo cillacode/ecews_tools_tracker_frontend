@@ -13,3 +13,11 @@ export const getFacilityStockSummary = () => api.get('/dashboard/facility-stock-
 export const getLgaKpis        = () => api.get('/dashboard/lga-kpis').then((r) => r.data);
 export const getLgaRecent      = () => api.get('/dashboard/lga-recent').then((r) => r.data);
 export const getLgaFacilities  = () => api.get('/dashboard/lga-facilities').then((r) => r.data);
+
+// HQ (super_admin) drill-down dashboard
+export const getHqKpis         = ()       => api.get('/dashboard/hq-kpis').then((r) => r.data);
+export const getHqCoverage     = (params) => api.get('/dashboard/hq-coverage', { params }).then((r) => r.data);
+
+// Facilities holding at least one low-stock tool (qty ≤ 10), with the low
+// tools nested per facility.
+export const getLowStockFacilities = () => api.get('/dashboard/low-stock-facilities').then((r) => r.data);

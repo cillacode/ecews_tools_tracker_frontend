@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ShieldAlert, AlertTriangle, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client';
+import { useAuth } from '../auth/useAuth';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card, CardBody, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -14,6 +15,8 @@ const postReset       = (body) => api.post('/admin/reset', body).then((r) => r.d
 
 export default function Settings() {
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const isSuper  = user?.role === 'super_admin';
   const [modalOpen,     setModalOpen]     = useState(false);
   const [confirmation,  setConfirmation]  = useState('');
   const [password,      setPassword]      = useState('');
@@ -32,9 +35,10 @@ export default function Settings() {
     onSuccess: (data) => {
       // Wipe every cached query — nearly every page reflects the cleared data.
       qc.invalidateQueries();
-      const { cleared } = data;
+      const { cleared, scope } = data;
+      const where = scope?.is_global ? 'all states' : scope?.state_name ?? 'your state';
       toast.success(
-        `Reset complete — cleared ${cleared.stock_movements} movements, ${cleared.tool_usage} usage entries, ${cleared.facility_stock} stock balances`,
+        `Reset complete for ${where} — cleared ${cleared.stock_movements} movements, ${cleared.tool_usage} usage entries, ${cleared.facility_stock} stock balances`,
         { duration: 6000 }
       );
       closeAndReset();
@@ -53,7 +57,7 @@ export default function Settings() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Settings"
+        title="System settings"
         subtitle="System-level controls and destructive admin tools."
       />
 
@@ -73,14 +77,18 @@ export default function Settings() {
         </CardHeader>
         <CardBody>
           <div className="rounded-lg border border-red-200 bg-red-50/40 p-4">
-            <p className="font-medium text-ink">Reset operational data</p>
+            <p className="font-medium text-ink">
+              {isSuper ? 'Reset operational data — all states' : 'Reset operational data — your state'}
+            </p>
             <p className="mt-1 max-w-3xl text-sm text-muted">
-              Permanently deletes every stock movement, every daily usage entry, and every facility stock
-              balance — the entire transactional history. Users, facilities, tools, thematic areas,
+              Permanently deletes stock movements, daily usage entries, facility stock balances, and the
+              HQ→state ledger (what HQ sent + the state balance). Users, facilities, tools, thematic areas,
               and low-stock thresholds are all preserved.
             </p>
             <p className="mt-2 text-xs text-muted">
-              Use this to wipe test data before going live, or between testing rounds.
+              {isSuper
+                ? 'As HQ, this clears EVERY state at once. Use it to wipe all test data before going live.'
+                : `This clears only ${user?.state_name ?? 'your state'} — other states are untouched.`}
             </p>
             <Button
               variant="danger"
@@ -102,6 +110,19 @@ export default function Settings() {
             <p>This action is permanent and cannot be undone. Read the preview carefully.</p>
           </div>
 
+          {/* Scope banner — makes the blast radius unmistakable. */}
+          <div className={`rounded-lg border px-3 py-2 text-sm ${
+            preview.is_global
+              ? 'border-red-300 bg-red-100/60 text-red-800'
+              : 'border-brand-200 bg-brand-50 text-brand-900'
+          }`}>
+            {previewLoading
+              ? 'Checking scope…'
+              : preview.is_global
+                ? 'Scope: ALL STATES. This clears every state’s data at once.'
+                : `Scope: ${preview.state_name ?? 'your state'} only. Other states are not touched.`}
+          </div>
+
           {/* Preview of counts to be deleted */}
           <div className="rounded-lg border border-line p-3">
             <p className="mb-2 text-xs uppercase tracking-wider text-muted">Will be permanently deleted:</p>
@@ -117,6 +138,14 @@ export default function Settings() {
               <li className="flex justify-between">
                 <span>Facility stock balances</span>
                 <span className="font-mono num font-semibold">{previewLoading ? '…' : preview.facility_stock ?? '—'}</span>
+              </li>
+              <li className="flex justify-between">
+                <span>HQ→state distributions</span>
+                <span className="font-mono num font-semibold">{previewLoading ? '…' : preview.state_movements ?? '—'}</span>
+              </li>
+              <li className="flex justify-between">
+                <span>State stock balances</span>
+                <span className="font-mono num font-semibold">{previewLoading ? '…' : preview.state_stock ?? '—'}</span>
               </li>
             </ul>
             {preview.open_disputes > 0 && (

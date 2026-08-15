@@ -13,6 +13,9 @@ import {
 } from '../api/dashboard';
 import { getLowStock } from '../api/thresholds';
 import { getDisputes, applyDispute } from '../api/movements';
+import { getStateIncoming } from '../api/stateReceipts';
+import { getLowTools } from '../api/procurement';
+import HqDashboard from './state/HqDashboard';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card, CardBody, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -86,7 +89,12 @@ function DisputesSection() {
   const applyMutation = useMutation({
     mutationFn: applyDispute,
     onSuccess: (res) => {
-      toast.success(res.data?.adjustment ? 'Adjustment applied — balance updated' : 'Dispute marked resolved');
+      const credited = res.data?.credited ?? 0;
+      toast.success(
+        credited > 0
+          ? `Dispute resolved — ${credited} credited to the facility's stock`
+          : 'Dispute resolved — nothing credited'
+      );
       qc.invalidateQueries({ queryKey: ['disputes'] });
       qc.invalidateQueries({ queryKey: ['movements'] });
       qc.invalidateQueries({ queryKey: ['dashboard-kpis'] });
@@ -107,14 +115,15 @@ function DisputesSection() {
           </div>
           <div>
             <CardTitle>{disputes.length} disputed receipt{disputes.length !== 1 ? 's' : ''} need review</CardTitle>
-            <CardDescription>Review the discrepancy and apply the suggested adjustment to reconcile.</CardDescription>
+            <CardDescription>
+              The facility's stock has NOT been credited yet — resolving credits the actual quantity they reported receiving.
+            </CardDescription>
           </div>
         </div>
       </CardHeader>
       <CardBody className="p-0">
         <ul className="divide-y divide-line">
           {disputes.map((d) => {
-            const diff = d.quantity - d.disputed_quantity;
             return (
               <li key={d.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center">
                 <div className="flex-1 min-w-0">
@@ -134,9 +143,9 @@ function DisputesSection() {
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
                   <div className="text-right text-xs">
-                    <p className="text-muted">Suggested</p>
-                    <p className="font-mono font-semibold text-red-600">
-                      {diff > 0 ? `−${diff}` : 'No adjustment'}
+                    <p className="text-muted">Will credit</p>
+                    <p className="font-mono font-semibold text-brand-700">
+                      {d.disputed_quantity > 0 ? `+${d.disputed_quantity}` : 'Nothing'}
                     </p>
                   </div>
                   <Button
@@ -146,7 +155,7 @@ function DisputesSection() {
                     loading={applyMutation.isPending && applyMutation.variables === d.id}
                     onClick={() => applyMutation.mutate(d.id)}
                   >
-                    Apply
+                    Resolve
                   </Button>
                 </div>
               </li>
@@ -162,12 +171,20 @@ function AdminKpiCards() {
   const { data, isLoading } = useQuery({ queryKey: ['dashboard-kpis'], queryFn: getKpis });
   const k = data?.data ?? {};
 
+  // Build the facilities-coverage subtitle from real counts.
+  const lgas   = k.total_lgas   ?? 0;
+  const states = k.total_states ?? 0;
+  const facilityHint =
+    states > 1
+      ? `across ${lgas} LGAs in ${states} states`
+      : `across ${lgas} LGA${lgas === 1 ? '' : 's'}`;
+
   const cards = [
     { label: 'Tools',          value: k.total_tools,           hint: 'across 10 thematic areas',  icon: Wrench,      href: '/tools' },
-    { label: 'Facilities',     value: k.total_facilities,      hint: 'across 11 LGAs in Lagos',   icon: Building2,   href: '/facilities' },
-    { label: 'Movements',      value: k.movements_this_month,  hint: 'recorded this month',       icon: ScrollText,  href: '/movements' },
-    { label: 'Open disputes',  value: k.open_disputes,         hint: 'awaiting resolution',       icon: TriangleAlert, tone: 'red' },
-    { label: 'Zero stock',     value: k.facilities_zero_stock, hint: 'facility-tool slots at 0',  icon: AlertCircle, tone: 'amber' },
+    { label: 'Facilities',     value: k.total_facilities,      hint: facilityHint,                icon: Building2,   href: '/facilities' },
+    { label: 'Stock records',  value: k.movements_this_month,  hint: 'recorded this month',       icon: ScrollText,  href: '/movements' },
+    { label: 'Open disputes',  value: k.open_disputes,         hint: 'awaiting resolution',            icon: TriangleAlert, tone: 'red' },
+    { label: 'Low stock',      value: k.facilities_low_stock,  hint: 'facilities need restocking',     icon: AlertCircle, tone: 'amber', href: '/low-stock' },
   ];
 
   return (
@@ -288,6 +305,63 @@ function RecentActivity({ queryKey, queryFn }) {
   );
 }
 
+// Banner alerting a state admin to HQ receipts awaiting acknowledgement.
+function HqReceiptsBanner() {
+  const { data } = useQuery({ queryKey: ['state-incoming'], queryFn: getStateIncoming, staleTime: 60_000 });
+  const pending = data?.data ?? [];
+  if (pending.length === 0) return null;
+
+  return (
+    <Link
+      to="/hq-receipts"
+      className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 transition-colors hover:bg-amber-100"
+    >
+      <Inbox size={18} className="mt-0.5 shrink-0 text-accent-700" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-accent-700">
+          {pending.length} HQ receipt{pending.length !== 1 ? 's' : ''} awaiting acknowledgement
+        </p>
+        <p className="mt-0.5 text-xs text-accent-700/80">
+          Confirm physical receipt of tools sent by HQ, then distribute to facilities.
+        </p>
+      </div>
+      <ArrowRight size={16} className="mt-0.5 shrink-0 text-accent-700" />
+    </Link>
+  );
+}
+
+// Procurement alert — tools whose STATE-WIDE balance has hit the re-order
+// level (default 20). State admins only; links to the Procurement module.
+function ProcurementBanner() {
+  const { user } = useAuth();
+  const { data } = useQuery({
+    queryKey: ['procurement-low-tools', { threshold: 20 }],
+    queryFn:  () => getLowTools({ threshold: 20 }),
+    enabled:  user?.role === 'admin',
+    staleTime: 60_000,
+  });
+  const count = data?.count ?? 0;
+  if (user?.role !== 'admin' || count === 0) return null;
+
+  return (
+    <Link
+      to="/procurement"
+      className="mb-4 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 transition-colors hover:bg-red-100"
+    >
+      <AlertCircle size={18} className="mt-0.5 shrink-0 text-red-600" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-red-700">
+          {count} tool{count !== 1 ? 's' : ''} at the state re-order level — procurement needed
+        </p>
+        <p className="mt-0.5 text-xs text-red-700/80">
+          Review the list by thematic area and download the request PDF to send to HQ.
+        </p>
+      </div>
+      <ArrowRight size={16} className="mt-0.5 shrink-0 text-red-600" />
+    </Link>
+  );
+}
+
 function AdminDashboard({ firstName }) {
   return (
     <>
@@ -295,9 +369,11 @@ function AdminDashboard({ firstName }) {
         title={`Welcome, ${firstName}`}
         subtitle="A snapshot of tool distribution across the network."
         actions={
-          <Link to="/stock/receive"><Button variant="primary">Record receipt</Button></Link>
+          <Link to="/distribution"><Button variant="primary">New distribution</Button></Link>
         }
       />
+      <ProcurementBanner />
+      <HqReceiptsBanner />
       <LowStockBanner />
       <DisputesSection />
 
@@ -325,7 +401,7 @@ function FacilityKpiCards() {
     { label: 'Pending acks',     value: k.pending_acks,         hint: 'awaiting your action',     icon: Inbox,         href: '/incoming', tone: k.pending_acks > 0 ? 'amber' : 'normal' },
     { label: 'Tools in stock',   value: k.tools_with_stock,     hint: 'with quantity > 0',        icon: Wrench },
     { label: 'Total quantity',   value: k.total_quantity,       hint: 'on hand at your facility', icon: Boxes },
-    { label: 'My movements',     value: k.movements_this_month, hint: 'recorded this month',      icon: ScrollText,    href: '/movements' },
+    { label: 'My stock records', value: k.movements_this_month, hint: 'recorded this month',      icon: ScrollText,    href: '/movements' },
   ];
 
   return (
@@ -451,7 +527,7 @@ function DsoKpiCards() {
     { label: 'Facilities',         value: k.total_facilities,      hint: 'in your LGA',              icon: Building2 },
     { label: 'Tools in stock',     value: k.unique_tools_stocked,  hint: 'with at least 1 unit',     icon: Wrench },
     { label: 'Total quantity',     value: k.total_quantity,        hint: 'across your LGA',          icon: Boxes },
-    { label: 'Movements',          value: k.movements_this_month,  hint: 'recorded this month',     icon: ScrollText, href: '/movements' },
+    { label: 'Stock records',      value: k.movements_this_month,  hint: 'recorded this month',     icon: ScrollText, href: '/movements' },
     { label: 'Zero stock',         value: k.facilities_zero_stock, hint: 'facility-tool slots at 0', icon: AlertCircle, tone: 'amber' },
   ];
 
@@ -468,11 +544,7 @@ function DsoFacilitiesTable() {
 
   return (
     <Card className="lg:col-span-2">
-      <CardHeader action={
-        <Link to="/facilities">
-          <Button variant="ghost" size="sm" rightIcon={<ArrowRight size={14} />}>View all</Button>
-        </Link>
-      }>
+      <CardHeader>
         <div>
           <CardTitle>Facilities in your LGA</CardTitle>
           <CardDescription>Stock coverage at each facility.</CardDescription>
@@ -562,6 +634,9 @@ function DsoDashboard({ firstName, lgaName }) {
 export default function Dashboard() {
   const { user } = useAuth();
   const firstName = user?.full_name?.split(' ')[0] ?? 'there';
+
+  // super_admin gets the HQ drill-down dashboard (its own page component).
+  if (user?.role === 'super_admin') return <HqDashboard />;
 
   let body;
   if (user?.role === 'facility_user') {

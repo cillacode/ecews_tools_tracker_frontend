@@ -8,6 +8,7 @@ import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { MobileNav } from './MobileNav';
+import { Footer } from './Footer';
 
 export function AppLayout() {
   return (
@@ -21,6 +22,7 @@ export function AppLayout() {
           <div className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-10">
             <Outlet />
           </div>
+          <Footer className="px-4 pb-6 md:px-8" />
         </main>
       </div>
 

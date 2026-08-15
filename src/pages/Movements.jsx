@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Filter } from 'lucide-react';
 import { getMovements } from '../api/movements';
 import { getFacilities } from '../api/facilities';
+import { useAuth } from '../auth/useAuth';
+import StateMovements from './state/StateMovements';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card, CardBody, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -24,6 +26,13 @@ const MOVEMENT_TYPES = [
 const LIMIT = 50;
 
 export default function Movements() {
+  const { user } = useAuth();
+  // HQ super-admin sees the STATE-tier distribution log.
+  if (user?.role === 'super_admin') return <StateMovements />;
+  return <FacilityMovements />;
+}
+
+function FacilityMovements() {
   const [page,        setPage]       = useState(1);
   const [facilityId,  setFacility]   = useState('');
   const [type,        setType]       = useState('');
@@ -61,7 +70,7 @@ export default function Movements() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Movements"
+        title="Stock movement"
         subtitle="Immutable audit ledger — every stock receipt, adjustment, and transfer."
       />
 

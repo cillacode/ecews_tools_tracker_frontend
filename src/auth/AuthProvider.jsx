@@ -4,6 +4,7 @@
 // clear local state immediately so the UI redirects to /login.
 
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { login as apiLogin, me as apiMe } from '../api/auth';
 
 const TOKEN_KEY = 'mer.token';
@@ -12,6 +13,7 @@ const USER_KEY  = 'mer.user';
 export const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
+  const queryClient = useQueryClient();
   const [user,  setUser]  = useState(() => {
     const raw = localStorage.getItem(USER_KEY);
     return raw ? JSON.parse(raw) : null;
@@ -20,22 +22,27 @@ export function AuthProvider({ children }) {
   const [bootstrapping, setBootstrapping] = useState(Boolean(localStorage.getItem(TOKEN_KEY)));
 
   // Centralised logout — also called by the 401 interceptor.
+  // Clears the React Query cache so no data leaks into the next session
+  // (e.g. a super_admin's all-states facility list showing for a state admin).
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     setToken(null);
     setUser(null);
-  }, []);
+    queryClient.clear();
+  }, [queryClient]);
 
-  // Login wrapper — persists and updates state.
+  // Login wrapper — persists and updates state. Cache is cleared FIRST so the
+  // incoming user starts from a blank slate, never the previous user's data.
   const signIn = useCallback(async (credentials) => {
     const { token: nextToken, user: nextUser } = await apiLogin(credentials);
+    queryClient.clear();
     localStorage.setItem(TOKEN_KEY, nextToken);
     localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
     setToken(nextToken);
     setUser(nextUser);
     return nextUser;
-  }, []);
+  }, [queryClient]);
 
   // On first load, if we have a token, always re-fetch the user from the
   // server. This both validates the token and refreshes any user-object

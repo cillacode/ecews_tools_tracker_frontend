@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { Plus, Pencil, UserX, UserCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getUsers, createUser, updateUser } from '../api/users';
-import { getFacilities, getLgas } from '../api/facilities';
+import { getFacilities, getLgas, getStates } from '../api/facilities';
 import { useAuth } from '../auth/useAuth';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card, CardBody } from '../components/ui/Card';
@@ -19,6 +19,7 @@ import { Spinner } from '../components/ui/Spinner';
 import { formatDate } from '../lib/formatters';
 
 const ROLE_LABELS = {
+  super_admin:        'Super admin',
   admin:              'Admin',
   central_logistics:  'Central logistics',
   facility_user:      'Facility user',
@@ -26,12 +27,18 @@ const ROLE_LABELS = {
   viewer:             'Viewer',
 };
 const ROLE_TONES = {
+  super_admin:       'brand',
   admin:             'brand',
   central_logistics: 'amber',
   facility_user:     'neutral',
   dso:               'amber',
   viewer:            'neutral',
 };
+
+// Roles whose `state_id` is submitted to the backend (others derive state via
+// facility/LGA, or — for super_admin — have no state at all).
+const STATE_BOUND_ROLES = ['admin', 'central_logistics', 'viewer'];
+const ALL_ROLE_VALUES = ['super_admin', 'admin', 'central_logistics', 'facility_user', 'viewer', 'dso'];
 
 // Treat empty-string / null / undefined as "absent". Without this, an empty
 // id field (e.g. for an admin) gets coerced to 0 and fails .positive().
@@ -46,9 +53,10 @@ const createSchema = z.object({
   username:    z.string().trim().min(3, 'At least 3 characters'),
   email:       z.string().email('Valid email required'),
   password:    z.string().min(8, 'At least 8 characters'),
-  role:        z.enum(['admin', 'central_logistics', 'facility_user', 'viewer', 'dso']),
+  role:        z.enum(ALL_ROLE_VALUES),
   facility_id: optionalId,
   lga_id:      optionalId,
+  state_id:    optionalId,
 })
   .refine(
     (d) => d.role !== 'facility_user' || typeof d.facility_id === 'number',
@@ -57,21 +65,31 @@ const createSchema = z.object({
   .refine(
     (d) => d.role !== 'dso' || typeof d.lga_id === 'number',
     { message: 'Please select an LGA', path: ['lga_id'] }
+  )
+  .refine(
+    // admin & central_logistics MUST have a state
+    (d) => !['admin', 'central_logistics'].includes(d.role) || typeof d.state_id === 'number',
+    { message: 'Please select a state', path: ['state_id'] }
   );
 
 // ── Edit user schema (password optional) ─────────────────────────────────────
 const editSchema = z.object({
   full_name:   z.string().trim().min(1).optional(),
   email:       z.string().email().optional(),
-  role:        z.enum(['admin', 'central_logistics', 'facility_user', 'viewer', 'dso']).optional(),
+  role:        z.enum(ALL_ROLE_VALUES).optional(),
   facility_id: optionalId,
   lga_id:      optionalId,
+  state_id:    optionalId,
   is_active:   z.boolean().optional(),
   password:    z.string().min(8).optional().or(z.literal('')),
 });
 
-function UserForm({ user, facilities, lgas, onSubmit, loading }) {
+function UserForm({ user, facilities, lgas, states, currentUser, onSubmit, loading }) {
   const isEdit = Boolean(user);
+  const isSuperAdmin = currentUser?.role === 'super_admin';
+  // For a state admin, all scope work is pinned to their own state.
+  const actorStateId = currentUser?.effective_state_id ?? currentUser?.state_id ?? '';
+
   const { register, handleSubmit, watch, formState: { errors } } = useForm({
     resolver: zodResolver(isEdit ? editSchema : createSchema),
     defaultValues: user
@@ -81,13 +99,34 @@ function UserForm({ user, facilities, lgas, onSubmit, loading }) {
           role:        user.role,
           facility_id: user.facility_id ?? '',
           lga_id:      user.lga_id      ?? '',
+          state_id:    user.state_id    ?? '',
           is_active:   user.is_active,
           password:    '',
         }
-      : { role: 'viewer', facility_id: '', lga_id: '' },
+      : {
+          role:        'viewer',
+          facility_id: '',
+          lga_id:      '',
+          state_id:    isSuperAdmin ? '' : String(actorStateId || ''),
+        },
   });
 
-  const role = watch('role');
+  const role    = watch('role');
+  const stateId = watch('state_id');
+
+  // Filter the facility / LGA pickers to the chosen state (client-side; the
+  // backend already restricts what a state admin can see).
+  const facilitiesInState = stateId
+    ? facilities.filter((f) => String(f.state_id) === String(stateId))
+    : facilities;
+  const lgasInState = stateId
+    ? lgas.filter((l) => String(l.state_id) === String(stateId))
+    : lgas;
+
+  // State is needed for every role except super_admin (where it's meaningless).
+  const showState = role !== 'super_admin';
+  // A state admin can't change the state — it's locked to theirs.
+  const stateLocked = !isSuperAdmin;
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -112,14 +151,35 @@ function UserForm({ user, facilities, lgas, onSubmit, loading }) {
           <option value="dso">Data Support Officer (LGA)</option>
           <option value="central_logistics">Central logistics</option>
           <option value="admin">Admin</option>
+          {isSuperAdmin && <option value="super_admin">Super admin (all states)</option>}
         </Select>
       </Field>
+
+      {showState && (
+        <Field
+          id="state_id"
+          label="State"
+          required={STATE_BOUND_ROLES.includes(role)}
+          hint={
+            stateLocked ? 'Locked to your state.'
+            : role === 'dso' ? 'Pick a state to choose an LGA within it.'
+            : role === 'facility_user' ? 'Pick a state to choose a facility within it.'
+            : undefined
+          }
+          error={errors.state_id?.message}
+        >
+          <Select id="state_id" {...register('state_id')} error={errors.state_id?.message} disabled={stateLocked}>
+            <option value="">Select state…</option>
+            {states.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </Select>
+        </Field>
+      )}
 
       {role === 'facility_user' && (
         <Field id="facility_id" label="Facility" required error={errors.facility_id?.message}>
           <Select id="facility_id" {...register('facility_id')} error={errors.facility_id?.message}>
             <option value="">Select facility…</option>
-            {facilities.map((f) => <option key={f.id} value={f.id}>{f.name} ({f.lga_name})</option>)}
+            {facilitiesInState.map((f) => <option key={f.id} value={f.id}>{f.name} ({f.lga_name})</option>)}
           </Select>
         </Field>
       )}
@@ -128,7 +188,7 @@ function UserForm({ user, facilities, lgas, onSubmit, loading }) {
         <Field id="lga_id" label="LGA" required hint="The DSO will only see facilities and movements within this LGA." error={errors.lga_id?.message}>
           <Select id="lga_id" {...register('lga_id')} error={errors.lga_id?.message}>
             <option value="">Select LGA…</option>
-            {lgas.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            {lgasInState.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </Select>
         </Field>
       )}
@@ -161,12 +221,14 @@ export default function Users() {
   const [confirmToggle,   setConfirmToggle]   = useState(null);
 
   const { data, isLoading } = useQuery({ queryKey: ['users'], queryFn: getUsers });
-  const { data: facData }   = useQuery({ queryKey: ['facilities'], queryFn: () => getFacilities({ limit: 200 }) });
-  const { data: lgaData }   = useQuery({ queryKey: ['lgas'],       queryFn: getLgas });
+  const { data: facData }   = useQuery({ queryKey: ['facilities'], queryFn: () => getFacilities({ limit: 500 }) });
+  const { data: lgaData }   = useQuery({ queryKey: ['lgas'],       queryFn: () => getLgas() });
+  const { data: stateData } = useQuery({ queryKey: ['states'],     queryFn: getStates });
 
   const users      = data?.data      ?? [];
   const facilities = facData?.data   ?? [];
   const lgas       = lgaData?.data   ?? [];
+  const states     = stateData?.data ?? [];
 
   const createMutation = useMutation({
     mutationFn: createUser,
@@ -204,29 +266,33 @@ export default function Users() {
     }
   }
 
+  // Strip scope fields the chosen role doesn't use. state_id only travels for
+  // admin/central/viewer; facility_user → facility_id; dso → lga_id.
   function handleCreate(data) {
     const payload = { ...data };
-    // Only the role-appropriate scoping field is sent; the other is dropped.
     if (data.role !== 'facility_user') delete payload.facility_id;
     if (data.role !== 'dso')           delete payload.lga_id;
+    if (!STATE_BOUND_ROLES.includes(data.role)) delete payload.state_id;
     if (!payload.facility_id) delete payload.facility_id;
     if (!payload.lga_id)      delete payload.lga_id;
+    if (!payload.state_id)    delete payload.state_id;
     createMutation.mutate(payload);
   }
 
   function handleEdit(data) {
     const payload = { ...data };
     if (!payload.password) delete payload.password;
-    // Force the irrelevant scoping field to null so the backend clears it.
+    // Force irrelevant scope fields to null so the backend clears them.
     payload.facility_id = data.role === 'facility_user' ? payload.facility_id ?? null : null;
     payload.lga_id      = data.role === 'dso'           ? payload.lga_id      ?? null : null;
+    payload.state_id    = STATE_BOUND_ROLES.includes(data.role) ? (payload.state_id ?? null) : null;
     editMutation.mutate({ id: editUser.id, body: payload });
   }
 
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Users"
+        title="User management"
         subtitle="Manage who can access the system and what they can do."
         actions={
           <Button variant="primary" leftIcon={<Plus size={16} />} onClick={() => setAddOpen(true)}>
@@ -270,11 +336,15 @@ export default function Users() {
                       <Badge tone={ROLE_TONES[u.role]}>{ROLE_LABELS[u.role]}</Badge>
                     </td>
                     <td className="px-5 py-3 text-muted">
-                      {u.facility_name
-                        ? u.facility_name
-                        : u.lga_name
-                          ? `${u.lga_name} LGA`
-                          : '—'}
+                      {u.role === 'super_admin'
+                        ? 'All states'
+                        : u.facility_name
+                          ? u.facility_name
+                          : u.lga_name
+                            ? `${u.lga_name} LGA`
+                            : u.state_name
+                              ? u.state_name
+                              : '—'}
                     </td>
                     <td className="px-5 py-3">
                       <Badge tone={u.is_active ? 'brand' : 'red'}>{u.is_active ? 'Active' : 'Inactive'}</Badge>
@@ -322,12 +392,12 @@ export default function Users() {
       )}
 
       <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add new user">
-        <UserForm facilities={facilities} lgas={lgas} onSubmit={handleCreate} loading={createMutation.isPending} />
+        <UserForm facilities={facilities} lgas={lgas} states={states} currentUser={currentUser} onSubmit={handleCreate} loading={createMutation.isPending} />
       </Modal>
 
       <Modal open={Boolean(editUser)} onClose={() => setEditUser(null)} title={`Edit — ${editUser?.full_name ?? ''}`}>
         {editUser && (
-          <UserForm user={editUser} facilities={facilities} lgas={lgas} onSubmit={handleEdit} loading={editMutation.isPending} />
+          <UserForm user={editUser} facilities={facilities} lgas={lgas} states={states} currentUser={currentUser} onSubmit={handleEdit} loading={editMutation.isPending} />
         )}
       </Modal>
 

@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Search, ChevronRight } from 'lucide-react';
 import { getFacilities, getLgas } from '../api/facilities';
+import { useAuth } from '../auth/useAuth';
+import HqStates from './HqStates';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -10,12 +12,19 @@ import { Select } from '../components/ui/Select';
 import { Spinner } from '../components/ui/Spinner';
 
 export default function Facilities() {
+  const { user } = useAuth();
+  // HQ browses by State (drill-down); state admins get their flat facility list.
+  if (user?.role === 'super_admin') return <HqStates />;
+  return <StateFacilities stateName={user?.state_name} />;
+}
+
+function StateFacilities({ stateName }) {
   const [search,  setSearch]  = useState('');
   const [lgaId,   setLgaId]   = useState('');
 
   const { data: facData, isLoading } = useQuery({
     queryKey: ['facilities'],
-    queryFn: () => getFacilities({ limit: 200 }),
+    queryFn: () => getFacilities({ limit: 1000 }),
   });
 
   const { data: lgaData } = useQuery({
@@ -24,6 +33,7 @@ export default function Facilities() {
   });
 
   const allFacilities = facData?.data ?? [];
+  const total         = facData?.meta?.total ?? allFacilities.length;
   const lgas          = lgaData?.data ?? [];
 
   const filtered = useMemo(() => {
@@ -50,7 +60,7 @@ export default function Facilities() {
     <div className="animate-fade-in">
       <PageHeader
         title="Facilities"
-        subtitle={`${allFacilities.length} facilities across ${lgas.length} LGAs of Lagos State.`}
+        subtitle={`${total} facilities across ${lgas.length} LGAs${stateName ? ` of ${stateName}` : ''}.`}
       />
 
       {/* Filters */}

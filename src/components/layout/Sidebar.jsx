@@ -63,13 +63,22 @@ export function Sidebar() {
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-ink">{user?.full_name}</p>
-            {user?.role === 'facility_user' && user?.facility_name ? (
+            {user?.role === 'super_admin' ? (
+              <p className="truncate text-xs font-medium text-accent-700" title="HQ — all states">
+                HQ · All states
+              </p>
+            ) : user?.role === 'facility_user' && user?.facility_name ? (
               <p className="truncate text-xs font-medium text-brand-700" title={user.facility_name}>
                 {user.facility_name}
               </p>
             ) : user?.role === 'dso' && user?.lga_name ? (
               <p className="truncate text-xs font-medium text-brand-700" title={`${user.lga_name} LGA`}>
                 {user.lga_name} LGA
+              </p>
+            ) : user?.state_name ? (
+              // admin / central / state-bound viewer → show their state.
+              <p className="truncate text-xs font-medium text-brand-700" title={user.state_name}>
+                {user.state_name}
               </p>
             ) : (
               <p className="truncate text-xs capitalize text-muted">{user?.role?.replace('_', ' ')}</p>

@@ -1,14 +1,18 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { CheckCircle } from 'lucide-react';
+import { CheckCircle, Printer, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getFacilities } from '../api/facilities';
 import { getTools, getThematicAreas } from '../api/tools';
+import { getStateStock } from '../api/stateMovements';
 import { recordReceipt } from '../api/movements';
+import { downloadFacilityGatePass } from '../api/reports';
+import { useAuth } from '../auth/useAuth';
+import StateReceive from './state/StateReceive';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card, CardBody } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -24,8 +28,35 @@ const schema = z.object({
 });
 
 export default function ReceiveStock() {
+  const { user } = useAuth();
+  // HQ super-admin records at the STATE tier; everyone else at the facility tier.
+  if (user?.role === 'super_admin') return <StateReceive />;
+  return <FacilityReceive />;
+}
+
+function FacilityReceive() {
   const [searchParams] = useSearchParams();
   const qc             = useQueryClient();
+  // The most recent distribution, so the admin can print its delivery note.
+  const [lastDist, setLastDist] = useState(null);
+  const [printing, setPrinting] = useState(false);
+
+  async function printDeliveryNote() {
+    if (!lastDist) return;
+    setPrinting(true);
+    try {
+      await downloadFacilityGatePass({
+        facility_id:  lastDist.facilityId,
+        reference_no: lastDist.reference || undefined,
+        lines:        [{ tool_id: lastDist.toolId, quantity: lastDist.quantity }],
+      });
+      toast.success('Delivery note downloaded');
+    } catch {
+      toast.error('Failed to generate delivery note');
+    } finally {
+      setPrinting(false);
+    }
+  }
 
   const { data: facData } = useQuery({
     queryKey: ['facilities'],
@@ -42,9 +73,17 @@ export default function ReceiveStock() {
     queryFn: getThematicAreas,
   });
 
+  // The state's per-tool balance, so we can show what's left before submitting.
+  const { data: stockData } = useQuery({
+    queryKey: ['state-stock'],
+    queryFn:  getStateStock,
+  });
+
   const facilities = facData?.data ?? [];
   const tools      = toolsData?.data ?? [];
   const areas      = areasData?.data ?? [];
+  // tool_id → available balance in the state.
+  const availableByTool = new Map((stockData?.data ?? []).map((r) => [String(r.tool_id), r]));
 
   // Group facilities by LGA for <optgroup>
   const facilityGroups = facilities.reduce((acc, f) => {
@@ -71,11 +110,18 @@ export default function ReceiveStock() {
     handleSubmit,
     reset,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(schema),
     defaultValues: { facility_id: '', tool_id: '', quantity: '', reference_no: '', note: '' },
   });
+
+  // Live view of the selected tool's state balance.
+  const selectedToolId = watch('tool_id');
+  const selectedQty    = parseInt(watch('quantity'), 10);
+  const selectedStock  = selectedToolId ? availableByTool.get(String(selectedToolId)) : undefined;
+  const overStock      = selectedStock && Number.isInteger(selectedQty) && selectedQty > selectedStock.available;
 
   // Pre-fill facility_id from URL param (set by "Record receipt" on facility detail)
   useEffect(() => {
@@ -91,6 +137,7 @@ export default function ReceiveStock() {
       qc.invalidateQueries({ queryKey: ['dashboard-coverage'] });
       qc.invalidateQueries({ queryKey: ['facility-stock'] });
       qc.invalidateQueries({ queryKey: ['movements'] });
+      qc.invalidateQueries({ queryKey: ['state-stock'] });
 
       // Confirm exactly which facility the receipt was logged to —
       // important so the admin doesn't accidentally pick the wrong one.
@@ -98,6 +145,14 @@ export default function ReceiveStock() {
         `Recorded ${meta.quantity} × ${meta.toolName} for ${meta.facilityName}`,
         { duration: 4500 }
       );
+      setLastDist({
+        facilityId:   meta.facilityId,
+        facilityName: meta.facilityName,
+        toolId:       meta.toolId,
+        toolName:     meta.toolName,
+        quantity:     meta.quantity,
+        reference:    meta.reference,
+      });
       reset({
         facility_id:  searchParams.get('facility_id') ?? '',
         tool_id:      '',
@@ -117,9 +172,12 @@ export default function ReceiveStock() {
     mutation.mutate({
       payload: data,
       meta:    {
+        facilityId:   Number(data.facility_id),
         facilityName: facility ? `${facility.name} (${facility.lga_name})` : 'facility',
+        toolId:       Number(data.tool_id),
         toolName:     tool?.name ?? 'tool',
         quantity:     data.quantity,
+        reference:    data.reference_no,
       },
     });
   };
@@ -127,11 +185,43 @@ export default function ReceiveStock() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Record receipt"
-        subtitle="Log stock arriving at a facility. Each submission creates a permanent audit record."
+        title="Single distribution"
+        subtitle="Send one tool to one facility. Each submission creates a permanent audit record and awaits the facility's physical confirmation."
       />
 
       <div className="max-w-xl">
+        {/* After a distribution, offer its delivery note for printing. */}
+        {lastDist && (
+          <div className="mb-4 flex flex-col gap-3 rounded-xl border border-brand-200 bg-brand-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-2.5">
+              <CheckCircle size={18} className="mt-0.5 shrink-0 text-brand-700" />
+              <p className="text-sm text-ink">
+                Recorded <span className="font-semibold">{lastDist.quantity} × {lastDist.toolName}</span> for{' '}
+                <span className="font-semibold">{lastDist.facilityName}</span>. Print a delivery note for the facility to sign.
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={printing}
+                leftIcon={<Printer size={15} />}
+                onClick={printDeliveryNote}
+              >
+                Print delivery note
+              </Button>
+              <button
+                type="button"
+                onClick={() => setLastDist(null)}
+                className="rounded-md p-2 text-muted transition-colors hover:bg-white hover:text-ink"
+                aria-label="Dismiss"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+
         <Card>
           <CardBody>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
@@ -163,6 +253,21 @@ export default function ReceiveStock() {
                     </optgroup>
                   ))}
                 </Select>
+                {selectedToolId && (
+                  selectedStock ? (
+                    <p className={`mt-1.5 text-xs ${selectedStock.available === 0 ? 'text-red-600' : 'text-muted'}`}>
+                      State balance:{' '}
+                      <span className={`font-semibold num ${selectedStock.available === 0 ? 'text-red-600' : 'text-accent-700'}`}>
+                        {selectedStock.available}
+                      </span>{' '}
+                      available ({selectedStock.received} received, {selectedStock.distributed} distributed)
+                    </p>
+                  ) : (
+                    <p className="mt-1.5 text-xs text-red-600">
+                      Not in your state stock yet — request it from HQ before distributing.
+                    </p>
+                  )
+                )}
               </Field>
 
               {/* Quantity */}
@@ -200,6 +305,15 @@ export default function ReceiveStock() {
                 />
               </Field>
 
+              {/* Over-distribution guard — mirrors the backend check. */}
+              {overStock && (
+                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  Only <span className="font-semibold num">{selectedStock.available}</span> of{' '}
+                  <span className="font-semibold">{selectedStock.tool_name}</span> available in your state stock —
+                  you cannot distribute {selectedQty}. Reduce the quantity or request more from HQ.
+                </p>
+              )}
+
               {/* Actions */}
               <div className="flex items-center justify-between gap-3 pt-2">
                 <Link to="/movements" className="text-sm text-muted hover:text-ink transition-colors">
@@ -208,6 +322,7 @@ export default function ReceiveStock() {
                 <Button
                   type="submit"
                   loading={isSubmitting}
+                  disabled={overStock}
                   leftIcon={<CheckCircle size={16} />}
                 >
                   Record receipt
