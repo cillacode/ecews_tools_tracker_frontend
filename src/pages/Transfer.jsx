@@ -119,7 +119,7 @@ export default function Transfer() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Inter-facility transfer"
+        title="Stock redistribution"
         subtitle="Move stock from one facility to another. Both balances update atomically."
       />
 

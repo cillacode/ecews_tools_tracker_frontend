@@ -1,199 +1,146 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import { PackageCheck, Plus, Trash2 } from 'lucide-react';
+import { Printer, X, PackageCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getFacilities } from '../api/facilities';
 import { getTools, getThematicAreas } from '../api/tools';
+import { getStateStock } from '../api/stateMovements';
 import { recordBulkReceipt } from '../api/movements';
+import { downloadFacilitiesGatePass } from '../api/reports';
+import { useAuth } from '../auth/useAuth';
+import StateBulkIssue from './state/StateBulkIssue';
 import { PageHeader } from '../components/layout/PageHeader';
-import { Card, CardBody, CardHeader, CardTitle } from '../components/ui/Card';
+import { BulkMatrix } from '../components/BulkMatrix';
 import { Button } from '../components/ui/Button';
-import { Input, Field } from '../components/ui/Input';
-import { Select } from '../components/ui/Select';
-
-const schema = z.object({
-  tool_id:      z.coerce.number().int().positive('Please select a tool'),
-  reference_no: z.string().trim().optional(),
-  note:         z.string().trim().optional(),
-});
 
 export default function BulkIssue() {
+  const { user } = useAuth();
+  // HQ super-admin bulk-issues to STATES; everyone else to facilities.
+  if (user?.role === 'super_admin') return <StateBulkIssue />;
+  return <FacilityBulkIssue />;
+}
+
+function FacilityBulkIssue() {
   const qc = useQueryClient();
-  // Items = [{ facility_id: string, quantity: string }]
-  const [items, setItems] = useState([{ facility_id: '', quantity: '' }]);
+  const [formKey,  setFormKey]  = useState(0);   // bump to reset the grid
+  const [lastBulk, setLastBulk] = useState(null); // for the delivery-note banner
+  const [printing, setPrinting] = useState(false);
 
-  const { data: facData  } = useQuery({ queryKey: ['facilities'],     queryFn: () => getFacilities({ limit: 200 }) });
-  const { data: toolsData } = useQuery({ queryKey: ['tools'],          queryFn: () => getTools({ limit: 200 }) });
+  const { data: facData   } = useQuery({ queryKey: ['facilities'],     queryFn: () => getFacilities({ limit: 1000 }) });
+  const { data: toolsData } = useQuery({ queryKey: ['tools'],          queryFn: () => getTools({ limit: 300 }) });
   const { data: areasData } = useQuery({ queryKey: ['thematic-areas'], queryFn: getThematicAreas });
+  const { data: stockData } = useQuery({ queryKey: ['state-stock'],    queryFn: getStateStock });
 
-  const facilities = facData?.data  ?? [];
-  const tools      = toolsData?.data ?? [];
-  const areas      = areasData?.data ?? [];
+  const facilities   = facData?.data  ?? [];
+  const tools        = toolsData?.data ?? [];
+  const areas        = areasData?.data ?? [];
+  const availableByTool = new Map((stockData?.data ?? []).map((r) => [String(r.tool_id), r]));
 
-  const facilityGroups = facilities.reduce((acc, f) => {
-    if (!acc[f.lga_name]) acc[f.lga_name] = [];
-    acc[f.lga_name].push(f);
-    return acc;
-  }, {});
-
-  const toolGroups = tools.reduce((acc, t) => {
-    if (!acc[t.thematic_area_name]) acc[t.thematic_area_name] = [];
-    acc[t.thematic_area_name].push(t);
-    return acc;
-  }, {});
-  const areaOrder = areas.map((a) => a.name);
-  const sortedToolGroupKeys = Object.keys(toolGroups).sort(
-    (a, b) => areaOrder.indexOf(a) - areaOrder.indexOf(b)
-  );
-
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm({
-    resolver: zodResolver(schema),
-    defaultValues: { tool_id: '', reference_no: '', note: '' },
-  });
-
-  function addRow()          { setItems((p) => [...p, { facility_id: '', quantity: '' }]); }
-  function removeRow(i)      { setItems((p) => p.filter((_, idx) => idx !== i)); }
-  function updateRow(i, key, val) {
-    setItems((p) => p.map((item, idx) => idx === i ? { ...item, [key]: val } : item));
-  }
+  // Facilities as grid rows, grouped by LGA in the picker.
+  const destinations = facilities.map((f) => ({ id: f.id, name: f.name, group: f.lga_name }));
 
   const mutation = useMutation({
     mutationFn: recordBulkReceipt,
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['dashboard-kpis'] });
-      qc.invalidateQueries({ queryKey: ['dashboard-recent'] });
-      qc.invalidateQueries({ queryKey: ['dashboard-coverage'] });
-      qc.invalidateQueries({ queryKey: ['facility-stock'] });
-      qc.invalidateQueries({ queryKey: ['movements'] });
-      toast.success(`Recorded ${data.count} receipts`);
-      reset();
-      setItems([{ facility_id: '', quantity: '' }]);
+    onSuccess: (data, variables) => {
+      ['dashboard-kpis', 'dashboard-recent', 'dashboard-coverage', 'facility-stock', 'movements', 'state-stock']
+        .forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      toast.success(`Recorded ${data.count} distribution${data.count !== 1 ? 's' : ''}`);
+
+      // Group the submitted lines by facility for a combined delivery note.
+      const byFac = new Map();
+      for (const it of variables.items) {
+        if (!byFac.has(it.facility_id)) {
+          const f = facilities.find((x) => x.id === it.facility_id);
+          byFac.set(it.facility_id, {
+            facility_id: it.facility_id,
+            name:        f ? `${f.name} (${f.lga_name})` : `Facility #${it.facility_id}`,
+            lines:       [],
+          });
+        }
+        byFac.get(it.facility_id).lines.push({ tool_id: it.tool_id, quantity: it.quantity });
+      }
+      setLastBulk({
+        reference:   variables.reference_no,
+        facilities:  [...byFac.values()],
+        toolCount:   new Set(variables.items.map((i) => i.tool_id)).size,
+      });
+      setFormKey((k) => k + 1); // reset the grid
     },
-    onError: (err) => toast.error(err.response?.data?.error ?? 'Failed to record bulk receipt'),
+    onError: (err) => toast.error(err.response?.data?.error ?? 'Failed to record bulk distribution'),
   });
 
-  function onSubmit(formData) {
-    const validItems = items.filter((i) => i.facility_id && i.quantity);
-    if (validItems.length === 0) {
-      toast.error('Add at least one facility with a quantity');
-      return;
-    }
-    const invalidQty = validItems.some((i) => parseInt(i.quantity, 10) <= 0);
-    if (invalidQty) {
-      toast.error('All quantities must be at least 1');
-      return;
-    }
+  function handleSubmit(lines, meta) {
     mutation.mutate({
-      tool_id:      formData.tool_id,
-      items:        validItems.map((i) => ({ facility_id: parseInt(i.facility_id, 10), quantity: parseInt(i.quantity, 10) })),
-      reference_no: formData.reference_no || undefined,
-      note:         formData.note         || undefined,
+      items:        lines.map((l) => ({ tool_id: l.tool_id, facility_id: l.dest_id, quantity: l.quantity })),
+      reference_no: meta.reference_no,
+      note:         meta.note,
     });
   }
 
-  const facilityOptions = Object.entries(facilityGroups)
-    .sort(([a],[b]) => a.localeCompare(b))
-    .map(([lga, facs]) => (
-      <optgroup key={lga} label={lga}>
-        {facs.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-      </optgroup>
-    ));
+  async function printDeliveryNotes() {
+    if (!lastBulk) return;
+    setPrinting(true);
+    try {
+      await downloadFacilitiesGatePass({
+        reference_no: lastBulk.reference || undefined,
+        facilities:   lastBulk.facilities.map((f) => ({ facility_id: f.facility_id, lines: f.lines })),
+      });
+      toast.success('Delivery notes downloaded');
+    } catch {
+      toast.error('Failed to generate delivery notes');
+    } finally {
+      setPrinting(false);
+    }
+  }
 
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Bulk issue"
-        subtitle="Distribute one tool to multiple facilities in a single submission."
+        title="Bulk distribution"
+        subtitle="Send multiple tools to multiple facilities in one submission. Fill the quantity grid — leave a cell blank to send nothing."
       />
 
-      <div className="max-w-2xl">
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-
-          {/* Tool + ref */}
-          <Card>
-            <CardBody className="space-y-4">
-              <Field id="tool_id" label="Tool to distribute" required error={errors.tool_id?.message}>
-                <Select id="tool_id" {...register('tool_id')} error={errors.tool_id?.message}>
-                  <option value="">Select tool…</option>
-                  {sortedToolGroupKeys.map((area) => (
-                    <optgroup key={area} label={area}>
-                      {toolGroups[area].map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </optgroup>
-                  ))}
-                </Select>
-              </Field>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field id="reference_no" label="Reference / waybill" hint="Optional — applies to all rows.">
-                  <Input id="reference_no" placeholder="e.g. WB-2025-010" {...register('reference_no')} />
-                </Field>
-                <Field id="note" label="Note" hint="Optional.">
-                  <Input id="note" placeholder="e.g. Q2 distribution" {...register('note')} />
-                </Field>
+      <div className="max-w-4xl">
+        {/* After a bulk distribution, offer a combined delivery note — one page per facility. */}
+        {lastBulk && (
+          <div className="mb-4 rounded-xl border border-brand-200 bg-brand-50/70 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2.5">
+                <PackageCheck size={18} className="mt-0.5 shrink-0 text-brand-700" />
+                <p className="text-sm text-ink">
+                  Distributed <span className="font-semibold">{lastBulk.toolCount} tool{lastBulk.toolCount !== 1 ? 's' : ''}</span> to{' '}
+                  <span className="font-semibold">{lastBulk.facilities.length} facilit{lastBulk.facilities.length !== 1 ? 'ies' : 'y'}</span>.
+                  Print the delivery notes — one page per facility.
+                </p>
               </div>
-            </CardBody>
-          </Card>
-
-          {/* Facility rows */}
-          <Card>
-            <CardHeader action={
-              <Button type="button" variant="secondary" size="sm" leftIcon={<Plus size={14} />} onClick={addRow}>
-                Add facility
-              </Button>
-            }>
-              <CardTitle>Facilities & quantities</CardTitle>
-            </CardHeader>
-            <CardBody className="space-y-3">
-              {items.map((item, i) => (
-                <div key={i} className="flex items-end gap-3">
-                  <div className="flex-1">
-                    {i === 0 && <p className="mb-1.5 text-sm font-medium text-ink">Facility <span className="text-red-600">*</span></p>}
-                    <Select
-                      value={item.facility_id}
-                      onChange={(e) => updateRow(i, 'facility_id', e.target.value)}
-                    >
-                      <option value="">Select facility…</option>
-                      {facilityOptions}
-                    </Select>
-                  </div>
-                  <div className="w-28">
-                    {i === 0 && <p className="mb-1.5 text-sm font-medium text-ink">Qty <span className="text-red-600">*</span></p>}
-                    <Input
-                      type="number"
-                      min="1"
-                      step="1"
-                      placeholder="Qty"
-                      value={item.quantity}
-                      onChange={(e) => updateRow(i, 'quantity', e.target.value)}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removeRow(i)}
-                    disabled={items.length === 1}
-                    className="mb-0.5 rounded-md p-2 text-muted transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
-                    aria-label="Remove row"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              ))}
-
-              <p className="text-xs text-muted">
-                {items.filter((i) => i.facility_id && i.quantity).length} of {items.length} row{items.length !== 1 ? 's' : ''} ready
-              </p>
-            </CardBody>
-          </Card>
-
-          <div className="flex justify-end">
-            <Button type="submit" loading={isSubmitting} leftIcon={<PackageCheck size={16} />}>
-              Submit bulk issue
-            </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button size="sm" variant="secondary" loading={printing} leftIcon={<Printer size={15} />} onClick={printDeliveryNotes}>
+                  Print delivery notes
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setLastBulk(null)}
+                  className="rounded-md p-2 text-muted transition-colors hover:bg-white hover:text-ink"
+                  aria-label="Dismiss"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
           </div>
-        </form>
+        )}
+
+        <BulkMatrix
+          key={formKey}
+          tools={tools}
+          areas={areas}
+          destinations={destinations}
+          destinationLabel="Facility"
+          destinationNoun="facilities"
+          availableByTool={availableByTool}
+          submitting={mutation.isPending}
+          onSubmit={handleSubmit}
+        />
       </div>
     </div>
   );

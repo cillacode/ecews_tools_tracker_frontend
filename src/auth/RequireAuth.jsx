@@ -33,7 +33,8 @@ export function RequireAuth({ roles, children }) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (roles && !roles.includes(user?.role)) {
+  // super_admin bypasses every role gate — they see everything by definition.
+  if (roles && user?.role !== 'super_admin' && !roles.includes(user?.role)) {
     return <Navigate to="/dashboard" replace />;
   }
 

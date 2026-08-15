@@ -3,14 +3,50 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Upload, FileText, CheckCircle, XCircle, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client';
-import { downloadTemplate } from '../api/reports';
+import { downloadTemplate, downloadStateTemplate, downloadBatchGatePass } from '../api/reports';
+import { useAuth } from '../auth/useAuth';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card, CardBody, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 
+// Role-specific import configuration. super_admin imports HQ→state
+// distributions; state admins import facility opening balances.
+const IMPORT_CONFIGS = {
+  super_admin: {
+    subtitle:     'Upload a CSV to record tools sent from HQ to states in bulk. All rows are validated before any record is created.',
+    templateFn:   downloadStateTemplate,
+    endpoint:     '/import/state-distributions',
+    columns:      'state_name, tool_name, quantity, reference_no, note',
+    fields: [
+      ['state_name', 'must match exactly (e.g. "Lagos")'],
+      ['tool_name',  'must match exactly (e.g. "ART register")'],
+      ['quantity',   'positive whole number'],
+      ['reference_no', 'optional'],
+      ['note',       'optional'],
+    ],
+    invalidate:   [['hq-kpis'], ['hq-coverage'], ['state-movements'], ['state-coverage']],
+  },
+  admin: {
+    subtitle:     'Upload a CSV to record opening balances across many facilities at once. All rows are validated before any record is created.',
+    templateFn:   downloadTemplate,
+    endpoint:     '/import/opening-balances',
+    columns:      'facility_name, tool_name, quantity, reference_no, note',
+    fields: [
+      ['facility_name', 'must match exactly (e.g. "Sango PHC")'],
+      ['tool_name',     'must match exactly (e.g. "ART register")'],
+      ['quantity',      'positive whole number'],
+      ['reference_no',  'optional'],
+      ['note',          'optional'],
+    ],
+    invalidate:   [['dashboard-kpis'], ['dashboard-coverage'], ['facility-stock']],
+  },
+};
+
 export default function Import() {
   const qc       = useQueryClient();
+  const { user } = useAuth();
+  const cfg      = IMPORT_CONFIGS[user?.role === 'super_admin' ? 'super_admin' : 'admin'];
   const fileRef  = useRef(null);
   const [file,     setFile]     = useState(null);
   const [result,   setResult]   = useState(null); // { imported, total, errors }
@@ -37,14 +73,12 @@ export default function Import() {
     formData.append('file', file);
 
     try {
-      const { data } = await api.post('/import/opening-balances', formData, {
+      const { data } = await api.post(cfg.endpoint, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setResult({ type: 'success', imported: data.imported, total: data.total });
+      setResult({ type: 'success', imported: data.imported, total: data.total, batch_no: data.batch_no });
       toast.success(data.message);
-      qc.invalidateQueries({ queryKey: ['dashboard-kpis'] });
-      qc.invalidateQueries({ queryKey: ['dashboard-coverage'] });
-      qc.invalidateQueries({ queryKey: ['facility-stock'] });
+      cfg.invalidate.forEach((key) => qc.invalidateQueries({ queryKey: key }));
       setFile(null);
       if (fileRef.current) fileRef.current.value = '';
     } catch (err) {
@@ -63,7 +97,7 @@ export default function Import() {
     <div className="animate-fade-in">
       <PageHeader
         title="Bulk import"
-        subtitle="Upload a CSV to record opening balances across many facilities at once. All rows are validated before any record is created."
+        subtitle={cfg.subtitle}
       />
 
       <div className="max-w-2xl space-y-4">
@@ -78,16 +112,14 @@ export default function Import() {
           </CardHeader>
           <CardBody>
             <div className="mb-4 overflow-x-auto rounded-lg border border-line bg-stone-50 p-3 font-mono text-xs text-muted">
-              facility_name, tool_name, quantity, reference_no, note
+              {cfg.columns}
             </div>
             <ul className="mb-4 space-y-1 text-sm text-muted">
-              <li><span className="font-medium text-ink">facility_name</span> — must match exactly (e.g. "Sango PHC")</li>
-              <li><span className="font-medium text-ink">tool_name</span> — must match exactly (e.g. "ART register")</li>
-              <li><span className="font-medium text-ink">quantity</span> — positive whole number</li>
-              <li><span className="font-medium text-ink">reference_no</span> — optional</li>
-              <li><span className="font-medium text-ink">note</span> — optional</li>
+              {cfg.fields.map(([name, desc]) => (
+                <li key={name}><span className="font-medium text-ink">{name}</span> — {desc}</li>
+              ))}
             </ul>
-            <Button variant="secondary" leftIcon={<Download size={15} />} onClick={downloadTemplate}>
+            <Button variant="secondary" leftIcon={<Download size={15} />} onClick={cfg.templateFn}>
               Download template (.csv)
             </Button>
           </CardBody>
@@ -142,12 +174,27 @@ export default function Import() {
               {result.type === 'success' ? (
                 <div className="flex items-start gap-3">
                   <CheckCircle size={20} className="mt-0.5 shrink-0 text-brand-700" />
-                  <div>
+                  <div className="flex-1">
                     <p className="font-medium text-ink">Import successful</p>
                     <p className="mt-1 text-sm text-muted">
                       Imported <span className="font-semibold text-ink num">{result.imported}</span> of{' '}
                       <span className="num">{result.total}</span> rows as stock receipts.
                     </p>
+                    {result.batch_no && (
+                      <div className="mt-3 flex flex-col gap-2 rounded-lg border border-line bg-stone-50/60 p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-sm text-ink">
+                          Batch <span className="font-mono font-semibold">{result.batch_no}</span> — print delivery notes for the receiving facilities to sign at the gate.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          leftIcon={<Download size={14} />}
+                          onClick={() => downloadBatchGatePass(result.batch_no).catch(() => toast.error('Failed to generate delivery notes'))}
+                        >
+                          Print delivery notes
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (

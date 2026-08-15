@@ -78,7 +78,7 @@ export default function StockAdjust() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Adjust stock"
+        title="Stock Adjustments"
         subtitle="Correct a facility's stock balance. A mandatory reason is recorded with every adjustment."
       />
 

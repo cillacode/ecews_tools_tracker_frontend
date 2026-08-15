@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { FileSpreadsheet, Download, ClipboardList } from 'lucide-react';
+import { FileSpreadsheet, Download, ClipboardList, Globe } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getFacilities } from '../api/facilities';
+import { getFacilities, getStates, getLgas } from '../api/facilities';
 import { downloadMovements, downloadFacilityStock, downloadCoveragePivot, downloadUsage } from '../api/reports';
+import { useAuth } from '../auth/useAuth';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card, CardBody, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -58,8 +59,22 @@ export default function Reports() {
   const [usageTo,       setUsageTo]       = useState('');
   const [usageLoading,  setUsageLoading]  = useState(false);
 
-  const { data: facData } = useQuery({ queryKey: ['facilities'], queryFn: () => getFacilities({ limit: 200 }) });
-  const facilities = facData?.data ?? [];
+  // HQ geo scope — a global State / LGA narrowing applied to every report.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
+  const [geoState, setGeoState] = useState('');
+  const [geoLga,   setGeoLga]   = useState('');
+
+  const { data: facData }   = useQuery({ queryKey: ['facilities'], queryFn: () => getFacilities({ limit: 500 }) });
+  const { data: stateData } = useQuery({ queryKey: ['states'],     queryFn: getStates });
+  const { data: lgaData }   = useQuery({ queryKey: ['lgas', geoState], queryFn: () => getLgas(geoState ? { state_id: geoState } : undefined) });
+
+  const facilities = facData?.data   ?? [];
+  const states     = stateData?.data ?? [];
+  const lgas       = lgaData?.data   ?? [];
+
+  // Merge the global geo scope into any report's params.
+  const geo = { state_id: geoState || undefined, lga_id: geoLga || undefined };
 
   async function handleDownload(fn, setLoading, label) {
     setLoading(true);
@@ -81,6 +96,38 @@ export default function Reports() {
       />
 
       <div className="space-y-4">
+
+        {/* HQ geo scope — narrows every report below by state / LGA */}
+        {isSuperAdmin && (
+          <Card className="border-brand-200 bg-brand-50/40">
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <div className="grid h-9 w-9 place-items-center rounded-lg bg-brand-100">
+                  <Globe size={18} className="text-brand-700" />
+                </div>
+                <div>
+                  <CardTitle>Report scope</CardTitle>
+                  <CardDescription>Narrow every report below to a state or LGA. Leave blank for all states.</CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardBody>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 max-w-lg">
+                <Select
+                  value={geoState}
+                  onChange={(e) => { setGeoState(e.target.value); setGeoLga(''); }}
+                >
+                  <option value="">All states</option>
+                  {states.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </Select>
+                <Select value={geoLga} onChange={(e) => setGeoLga(e.target.value)} disabled={!geoState}>
+                  <option value="">{geoState ? 'All LGAs in state' : 'Pick a state first'}</option>
+                  {lgas.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </Select>
+              </div>
+            </CardBody>
+          </Card>
+        )}
 
         {/* Movement log export */}
         <ReportCard
@@ -104,7 +151,7 @@ export default function Reports() {
               loading={movLoading}
               leftIcon={<Download size={15} />}
               onClick={() => handleDownload(
-                () => downloadMovements({ type: movType || undefined, facility_id: movFacility || undefined, from: movFrom || undefined, to: movTo || undefined }),
+                () => downloadMovements({ ...geo, type: movType || undefined, facility_id: movFacility || undefined, from: movFrom || undefined, to: movTo || undefined }),
                 setMovLoading, 'Movement log'
               )}
             >
@@ -128,7 +175,7 @@ export default function Reports() {
               loading={stockLoading}
               leftIcon={<Download size={15} />}
               onClick={() => handleDownload(
-                () => downloadFacilityStock({ facility_id: stockFacility || undefined }),
+                () => downloadFacilityStock({ ...geo, facility_id: stockFacility || undefined }),
                 setStockLoading, 'Facility stock snapshot'
               )}
             >
@@ -174,7 +221,7 @@ export default function Reports() {
               loading={usageLoading}
               leftIcon={<Download size={15} />}
               onClick={() => handleDownload(
-                () => downloadUsage({ facility_id: usageFacility || undefined, from: usageFrom || undefined, to: usageTo || undefined }),
+                () => downloadUsage({ ...geo, facility_id: usageFacility || undefined, from: usageFrom || undefined, to: usageTo || undefined }),
                 setUsageLoading, 'Tool usage'
               )}
             >

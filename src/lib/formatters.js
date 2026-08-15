@@ -52,3 +52,11 @@ export const ACK_TONES = {
   ACCEPTED:    'brand',
   DISPUTED:    'red',
 };
+
+// Traffic-light stock levels — must stay in sync with the facility stock
+// report thresholds (backend reports.js): ≤5 red, 6–10 orange, >10 green.
+export function stockLevel(qty) {
+  if (qty <= 5)  return { key: 'restock', label: 'Restock tool', badge: 'bg-red-600 text-white' };
+  if (qty <= 10) return { key: 'low',     label: 'Low stock',    badge: 'bg-amber-500 text-white' };
+  return           { key: 'ok',      label: 'Adequate',     badge: 'bg-brand-700 text-white' };
+}

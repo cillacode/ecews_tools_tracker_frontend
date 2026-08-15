@@ -17,6 +17,7 @@ import { useAuth } from '../auth/useAuth';
 import { Button } from '../components/ui/Button';
 import { Input, Field } from '../components/ui/Input';
 import { Brand } from '../components/layout/Brand';
+import { Footer } from '../components/layout/Footer';
 
 const schema = z.object({
   identifier: z.string().trim().min(1, 'Username or email is required'),
@@ -123,6 +124,8 @@ export default function Login() {
         <p className="mt-6 text-center text-xs text-muted">
           Trouble signing in? Contact your system administrator.
         </p>
+
+        <Footer className="mt-4" />
       </div>
     </div>
   );

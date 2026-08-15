@@ -1,10 +1,12 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Save, ChevronLeft, ChevronRight, CalendarDays, Info, CalendarClock, AlertTriangle } from 'lucide-react';
+import { Save, ChevronLeft, ChevronRight, CalendarDays, Info, CalendarClock, AlertTriangle, PlusCircle, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../auth/useAuth';
 import { submitDailyUsage, getUsageTracker } from '../api/usage';
+import { getServicePoints } from '../api/servicePoints';
 import { PageHeader } from '../components/layout/PageHeader';
+import { UsageWizard } from '../components/UsageWizard';
 import { Card, CardBody } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -37,11 +39,13 @@ function shiftDays(isoDate, deltaDays) {
 }
 
 function formatWeekRange(mondayISO) {
+  // Working week runs Monday → Friday (weekend entries still count into the
+  // same week bucket, but the label reflects the Mon–Fri work week).
   const monday = new Date(mondayISO + 'T00:00:00');
-  const sunday = new Date(monday);
-  sunday.setDate(sunday.getDate() + 6);
+  const friday = new Date(monday);
+  friday.setDate(friday.getDate() + 4);
   const fmt = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  return `${fmt(monday)} – ${fmt(sunday)} ${sunday.getFullYear()}`;
+  return `${fmt(monday)} – ${fmt(friday)} ${friday.getFullYear()}`;
 }
 
 function formatDateLong(isoDate) {
@@ -82,10 +86,12 @@ export default function Usage() {
   // The date being recorded against (defaults to today, can be back-dated).
   const [recordDate, setRecordDate] = useState(today);
 
-  // `addCounts[tool_id]` holds the new amount to ADD for this submission.
-  // Inputs clear after save (the saved total shows in the tracker columns).
-  const [addCounts, setAddCounts] = useState({});
-  const [notes,     setNotes]     = useState({});
+  // `entries[tool_id]` holds a completed guided entry for this submission:
+  // { count, service_point_id, service_point_name, physical_balance, note }.
+  // Cleared after save (the saved total shows in the tracker columns).
+  const [entries,    setEntries]    = useState({});
+  const [wizardTool, setWizardTool] = useState(null);
+  const clearEntry = (toolId) => setEntries((p) => { const n = { ...p }; delete n[toolId]; return n; });
 
   const isFutureWeek      = weekStart  > todayMonday;
   const recordDateInWeek  = recordDate >= weekStart && recordDate < shiftDays(weekStart, 7);
@@ -97,6 +103,9 @@ export default function Usage() {
     enabled:  Boolean(user?.facility_id),
     staleTime: 0,
   });
+
+  const { data: spData } = useQuery({ queryKey: ['service-points'], queryFn: getServicePoints });
+  const servicePoints = spData?.data ?? [];
 
   const tools = trackerData?.data ?? [];
 
@@ -111,24 +120,23 @@ export default function Usage() {
     return Array.from(map.values());
   }, [tools]);
 
-  const totalToAdd = useMemo(() => Object.values(addCounts).reduce((s, v) => {
-    const n = parseInt(v, 10);
-    return s + (isNaN(n) ? 0 : n);
-  }, 0), [addCounts]);
+  const totalToAdd = useMemo(
+    () => Object.values(entries).reduce((s, e) => s + (e?.count || 0), 0),
+    [entries]
+  );
 
-  // Tools where the typed value would exceed available stock (Ending).
-  // Used to block submission client-side and show inline warnings.
+  // Recorded entries that would exceed available stock (Ending). The wizard
+  // prevents this, but keep the guard as a backstop before submission.
   const overDraws = useMemo(() => {
     const list = [];
     for (const t of tools) {
-      const raw = addCounts[t.tool_id];
-      const n = parseInt(raw, 10);
-      if (!isNaN(n) && n > 0 && n > t.ending_balance) {
-        list.push({ tool_id: t.tool_id, tool_name: t.tool_name, attempting: n, available: t.ending_balance });
+      const e = entries[t.tool_id];
+      if (e && e.count > t.ending_balance) {
+        list.push({ tool_id: t.tool_id, tool_name: t.tool_name, attempting: e.count, available: t.ending_balance });
       }
     }
     return list;
-  }, [tools, addCounts]);
+  }, [tools, entries]);
   const hasOverDraw = overDraws.length > 0;
 
   const mutation = useMutation({
@@ -142,8 +150,7 @@ export default function Usage() {
       qc.invalidateQueries({ queryKey: ['facility-recent'] });
       qc.invalidateQueries({ queryKey: ['facility-stock-summary'] });
       toast.success(`Saved usage for ${formatDateLong(recordDate)} — stock updated`);
-      setAddCounts({});
-      setNotes({});
+      setEntries({});
     },
     onError: (err) => toast.error(err.response?.data?.error ?? 'Failed to save usage'),
   });
@@ -162,23 +169,25 @@ export default function Usage() {
       );
       return;
     }
-    const entries = tools
+    const payload = tools
       .map((t) => {
-        const raw = addCounts[t.tool_id];
-        const n = raw === '' || raw === undefined ? 0 : parseInt(raw, 10);
+        const e = entries[t.tool_id];
+        if (!e || e.count <= 0) return null;
         return {
-          tool_id: t.tool_id,
-          count:   isNaN(n) ? 0 : n,
-          note:    notes[t.tool_id]?.trim() || undefined,
+          tool_id:          t.tool_id,
+          count:            e.count,
+          note:             e.note,
+          service_point_id: e.service_point_id,
+          physical_balance: e.physical_balance,
         };
       })
-      .filter((e) => e.count > 0);
+      .filter(Boolean);
 
-    if (entries.length === 0) {
-      toast.error('Enter usage for at least one tool');
+    if (payload.length === 0) {
+      toast.error('Record usage for at least one tool');
       return;
     }
-    mutation.mutate({ usage_date: recordDate, entries });
+    mutation.mutate({ usage_date: recordDate, entries: payload });
   }
 
   // Jump the tracker view to the week that contains the record date.
@@ -321,10 +330,8 @@ export default function Usage() {
 
               <div className="divide-y divide-line">
                 {group.tools.map((t) => {
-                  const typed = parseInt(addCounts[t.tool_id], 10);
-                  const typedValid = !isNaN(typed) && typed > 0;
-                  const isOverDraw = typedValid && typed > t.ending_balance;
                   const outOfStock = t.ending_balance === 0;
+                  const entry = entries[t.tool_id];
                   return (
                     <div key={t.tool_id} className="px-5 py-4">
                       <div className="mb-3 flex items-center justify-between">
@@ -344,37 +351,37 @@ export default function Usage() {
                         <Stat label="Ending"    value={t.ending_balance}       tone="end" />
                       </div>
 
-                      {/* Daily entry row */}
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        <div className="w-full sm:w-36">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="1"
-                            max={t.ending_balance}
-                            placeholder="Add usage"
-                            value={addCounts[t.tool_id] ?? ''}
-                            onChange={(e) => setAddCounts((c) => ({ ...c, [t.tool_id]: e.target.value }))}
-                            disabled={recordDateInvalid || outOfStock}
-                            error={isOverDraw ? 'over' : undefined}
-                          />
+                      {/* Guided entry */}
+                      {recordDateInvalid ? (
+                        <p className="text-xs text-muted">Pick a valid record date to log usage.</p>
+                      ) : entry ? (
+                        <div className="flex items-center justify-between gap-3 rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2">
+                          <p className="text-sm text-ink">
+                            Gave <span className="font-semibold num">{entry.count}</span> → <span className="font-semibold">{entry.service_point_name}</span>
+                            <span className="text-muted"> · physical balance {entry.physical_balance} ✓</span>
+                          </p>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <Button size="sm" variant="ghost" onClick={() => setWizardTool(t)}>Change</Button>
+                            <button
+                              type="button"
+                              onClick={() => clearEntry(t.tool_id)}
+                              className="rounded-md p-1.5 text-muted transition-colors hover:bg-white hover:text-red-600"
+                              aria-label="Remove entry"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex-1">
-                          <Input
-                            placeholder="Note (optional)"
-                            value={notes[t.tool_id] ?? ''}
-                            onChange={(e) => setNotes((n) => ({ ...n, [t.tool_id]: e.target.value }))}
-                            disabled={recordDateInvalid || outOfStock}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Inline over-draw warning */}
-                      {isOverDraw && (
-                        <p className="mt-2 flex items-center gap-1.5 text-xs text-red-600">
-                          <AlertTriangle size={12} />
-                          Only {t.ending_balance} available — your entry exceeds stock.
-                        </p>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          leftIcon={<PlusCircle size={15} />}
+                          disabled={outOfStock}
+                          onClick={() => setWizardTool(t)}
+                        >
+                          {outOfStock ? 'Out of stock' : 'Add usage'}
+                        </Button>
                       )}
                     </div>
                   );
@@ -401,6 +408,18 @@ export default function Usage() {
             </Button>
           </div>
         </div>
+      )}
+
+      {wizardTool && (
+        <UsageWizard
+          tool={wizardTool}
+          servicePoints={servicePoints}
+          onClose={() => setWizardTool(null)}
+          onComplete={(data) => {
+            setEntries((p) => ({ ...p, [wizardTool.tool_id]: data }));
+            setWizardTool(null);
+          }}
+        />
       )}
     </div>
   );

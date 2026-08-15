@@ -166,10 +166,43 @@ function IncomingRow({ movement, onAccept, onDispute, accepting }) {
   );
 }
 
+// ── Physical-receipt confirmation modal ──────────────────────────────────────
+// Stock is only credited once the facility confirms the tools were physically
+// received and counted — this modal is that confirmation step.
+function ConfirmReceiptModal({ movement, onClose, onConfirm, loading }) {
+  if (!movement) return null;
+  return (
+    <Modal open onClose={onClose} title="Confirm physical receipt">
+      <div className="space-y-4">
+        <div className="rounded-lg border border-line bg-stone-50/60 p-3 text-sm">
+          <p className="text-muted">Recorded quantity</p>
+          <p className="font-serif text-2xl italic num text-ink">{movement.quantity}</p>
+          <p className="mt-1 text-xs text-muted">{movement.tool_name}</p>
+        </div>
+        <p className="text-sm text-ink">
+          Have these tools been <span className="font-semibold">physically received and counted</span> at
+          your facility? Accepting will add <span className="font-semibold num">{movement.quantity}</span> to
+          your stock balance.
+        </p>
+        <p className="text-xs text-muted">
+          If the count doesn't match what arrived, cancel and use <span className="font-medium">Dispute</span> instead.
+        </p>
+        <div className="flex justify-end gap-3 pt-1">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={loading} leftIcon={<Check size={15} />} onClick={onConfirm}>
+            Yes — received physically
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function Incoming() {
   const qc = useQueryClient();
   const [disputeMov,  setDisputeMov]   = useState(null);
+  const [confirmMov,  setConfirmMov]   = useState(null);
   const [acceptingId, setAcceptingId]  = useState(null);
 
   const { data, isLoading } = useQuery({
@@ -194,7 +227,14 @@ export default function Incoming() {
     mutationFn: (movement) => acknowledge(movement.id, { decision: 'ACCEPTED' }),
     onMutate:   (movement) => setAcceptingId(movement.id),
     onSettled:  () => setAcceptingId(null),
-    onSuccess:  () => { toast.success('Accepted'); invalidateAll(); },
+    onSuccess:  () => {
+      toast.success('Receipt confirmed — stock added to your balance');
+      setConfirmMov(null);
+      invalidateAll();
+      qc.invalidateQueries({ queryKey: ['facility-stock'] });
+      qc.invalidateQueries({ queryKey: ['facility-stock-summary'] });
+      qc.invalidateQueries({ queryKey: ['usage-tracker'] });
+    },
     onError:    (err) => toast.error(err.response?.data?.error ?? 'Failed to accept'),
   });
 
@@ -218,7 +258,7 @@ export default function Incoming() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Incoming"
+        title="Incoming stock"
         subtitle="Tools sent to your facility — confirm them as received or open a dispute if anything is off."
       />
 
@@ -250,7 +290,7 @@ export default function Incoming() {
                 <li key={m.id}>
                   <IncomingRow
                     movement={m}
-                    onAccept={(mov) => acceptMutation.mutate(mov)}
+                    onAccept={setConfirmMov}
                     onDispute={setDisputeMov}
                     accepting={acceptingId === m.id}
                   />
@@ -260,6 +300,13 @@ export default function Incoming() {
           </Card>
         </div>
       )}
+
+      <ConfirmReceiptModal
+        movement={confirmMov}
+        onClose={() => setConfirmMov(null)}
+        onConfirm={() => acceptMutation.mutate(confirmMov)}
+        loading={acceptMutation.isPending}
+      />
 
       <DisputeModal
         open={Boolean(disputeMov)}
