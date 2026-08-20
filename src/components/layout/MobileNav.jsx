@@ -8,11 +8,13 @@
 import { NavLink } from 'react-router-dom';
 import { visibleNavItems } from './navItems';
 import { useAuth } from '../../auth/useAuth';
+import { useNotifications, badgeForRoute } from '../../hooks/useNotifications';
 import { cn } from '../../lib/utils';
 
 export function MobileNav() {
   const { user } = useAuth();
   const items = visibleNavItems(user?.role, { mobile: true });
+  const counts = useNotifications();
 
   return (
     <nav
@@ -22,6 +24,7 @@ export function MobileNav() {
       {items.map((item) => {
         const Icon = item.icon;
         const isPrimary = item.primary;
+        const badge = badgeForRoute(item.to, counts);
 
         return (
           <NavLink
@@ -54,7 +57,14 @@ export function MobileNav() {
                 </>
               ) : (
                 <>
-                  <Icon size={20} />
+                  <span className="relative">
+                    <Icon size={20} />
+                    {badge > 0 && (
+                      <span className="absolute -right-2 -top-1.5 grid min-w-[1rem] justify-items-center rounded-full bg-red-600 px-1 text-[9px] font-bold leading-tight text-white">
+                        {badge > 9 ? '9+' : badge}
+                      </span>
+                    )}
+                  </span>
                   <span>{item.label}</span>
                 </>
               )

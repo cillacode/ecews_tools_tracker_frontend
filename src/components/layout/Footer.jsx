@@ -4,7 +4,7 @@ export function Footer({ className = '' }) {
   const year = new Date().getFullYear();
   return (
     <footer className={`text-center text-xs text-muted ${className}`}>
-      MER Tools · Developed by <span className="font-medium text-ink/70">Priscillia</span> · © {year}
+      PTIS · Developed by <span className="font-medium text-ink/70">Priscillia</span> · © {year}
     </footer>
   );
 }

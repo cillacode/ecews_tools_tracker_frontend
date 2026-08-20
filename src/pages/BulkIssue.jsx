@@ -42,7 +42,7 @@ function FacilityBulkIssue() {
   const mutation = useMutation({
     mutationFn: recordBulkReceipt,
     onSuccess: (data, variables) => {
-      ['dashboard-kpis', 'dashboard-recent', 'dashboard-coverage', 'facility-stock', 'movements', 'state-stock']
+      ['dashboard-kpis', 'dashboard-recent', 'dashboard-coverage', 'facility-stock', 'movements', 'state-stock', 'notification-summary']
         .forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
       toast.success(`Recorded ${data.count} distribution${data.count !== 1 ? 's' : ''}`);
 

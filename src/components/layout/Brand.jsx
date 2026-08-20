@@ -19,8 +19,8 @@ export function Brand({ variant = 'wordmark', className }) {
       </span>
       {variant === 'wordmark' && (
         <span className="leading-none">
-          <span className="block font-serif text-lg italic text-ink">MER Tools</span>
-          <span className="block text-[10px] uppercase tracking-[0.18em] text-muted">Distribution</span>
+          <span className="block font-sans text-xl font-extrabold tracking-tight text-ink">PTIS</span>
+          <span className="mt-0.5 block max-w-[10rem] text-[10px] leading-tight text-muted">Program Tools Inventory System</span>
         </span>
       )}
     </span>

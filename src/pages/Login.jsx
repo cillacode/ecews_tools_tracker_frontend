@@ -1,7 +1,7 @@
 // Login page. Single-column centered card on a warm paper background.
 // Two moments of personality:
 //   1. The serif italic in the brand mark — already there.
-//   2. The headline — a soft, declarative welcome ("Sign in to MER Tools").
+//   2. The headline — a soft, declarative welcome ("Sign in to PTIS").
 //
 // Form is react-hook-form + zod for inline validation. Errors surface under
 // the inputs; submission errors surface as a toast plus an inline strip.

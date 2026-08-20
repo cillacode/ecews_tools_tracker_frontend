@@ -3,27 +3,51 @@ import { AlertTriangle, ArrowRight, ArrowLeft, Check } from 'lucide-react';
 import { Modal } from './ui/Modal';
 import { Button } from './ui/Button';
 import { Input, Field } from './ui/Input';
-import { Select } from './ui/Select';
+import { MultiSelect } from './ui/MultiSelect';
 
 // Guided usage entry with a physical-count validation gate.
 //   ask     → "Did you give out this tool this week?"  No = cancel, Yes = next
-//   details → quantity given + service point (+ optional tool unique ID)
+//   details → quantity given + service point(s) (checkboxes + "Others") + note
 //   balance → physically counted balance; must reconcile with (on-hand − given)
-// onComplete({ count, service_point_id, service_point_name, physical_balance, note }).
+// onComplete({ count, service_point_ids, service_point_other, service_point_label, physical_balance, note }).
 export function UsageWizard({ tool, servicePoints = [], onClose, onComplete }) {
   const onHand = tool?.ending_balance ?? 0;
 
   const [step, setStep]   = useState('ask');
   const [qty, setQty]     = useState('');
-  const [spId, setSpId]   = useState('');
+  const [spIds, setSpIds] = useState(() => new Set()); // service point ids + '__other__'
+  const [spOther, setSpOther] = useState('');
   const [note, setNote]   = useState('');
   const [physical, setPhysical] = useState('');
   const [tallyError, setTallyError] = useState(false);
 
   if (!tool) return null;
 
-  const count = parseInt(qty, 10);
-  const detailsValid = Number.isInteger(count) && count > 0 && count <= onHand && spId;
+  const count     = parseInt(qty, 10);
+  const hasOther  = spIds.has('__other__');
+  const knownIds  = [...spIds].filter((id) => id !== '__other__');
+  const spValid   = spIds.size > 0 && (!hasOther || spOther.trim().length > 0);
+  const detailsValid = Number.isInteger(count) && count > 0 && count <= onHand && spValid;
+
+  // Service points as one checkbox group, with a synthetic "Others" option.
+  const spGroups = [{
+    name: null,
+    items: [...servicePoints.map((s) => ({ id: s.id, name: s.name })), { id: '__other__', name: 'Others' }],
+  }];
+
+  function toggleSp(id) {
+    setSpIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function serviceLabel() {
+    const names = knownIds.map((id) => servicePoints.find((s) => s.id === id)?.name).filter(Boolean);
+    if (hasOther && spOther.trim()) names.push(`Others: ${spOther.trim()}`);
+    return names.join(', ');
+  }
 
   function confirmBalance() {
     const phys = parseInt(physical, 10);
@@ -33,13 +57,13 @@ export function UsageWizard({ tool, servicePoints = [], onClose, onComplete }) {
       setTallyError(true);   // hard block — they must recount
       return;
     }
-    const sp = servicePoints.find((s) => String(s.id) === String(spId));
     onComplete({
       count,
-      service_point_id:   Number(spId),
-      service_point_name: sp?.name ?? '',
-      physical_balance:   phys,
-      note:               note.trim() || undefined,
+      service_point_ids:   knownIds.map(Number),
+      service_point_other: hasOther ? spOther.trim() : undefined,
+      service_point_label: serviceLabel(),
+      physical_balance:    phys,
+      note:                note.trim() || undefined,
     });
   }
 
@@ -68,12 +92,21 @@ export function UsageWizard({ tool, servicePoints = [], onClose, onComplete }) {
             />
           </Field>
 
-          <Field id="sp" label="Service point" required hint="Where the tools were given.">
-            <Select id="sp" value={spId} onChange={(e) => setSpId(e.target.value)}>
-              <option value="">Select service point…</option>
-              {servicePoints.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </Select>
+          <Field id="sp" label="Service point(s)" required hint="Tick every point the tools went to.">
+            <MultiSelect
+              placeholder="Select service point(s)…"
+              searchable={false}
+              groups={spGroups}
+              selectedIds={spIds}
+              onToggle={toggleSp}
+            />
           </Field>
+
+          {hasOther && (
+            <Field id="sp-other" label="Specify other service point(s)" required>
+              <Input id="sp-other" placeholder="e.g. Outreach / Community" value={spOther} onChange={(e) => setSpOther(e.target.value)} />
+            </Field>
+          )}
 
           <Field id="note" label="Tool unique ID" hint="Optional.">
             <Input id="note" placeholder="Optional reference" value={note} onChange={(e) => setNote(e.target.value)} />
