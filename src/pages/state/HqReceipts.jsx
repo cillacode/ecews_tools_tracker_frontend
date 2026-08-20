@@ -72,6 +72,7 @@ export default function HqReceipts() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['state-incoming'] });
       qc.invalidateQueries({ queryKey: ['state-history'] });
+      qc.invalidateQueries({ queryKey: ['notification-summary'] });
       toast.success('Receipt acknowledged');
       setAccepting(null);
     },

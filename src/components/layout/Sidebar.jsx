@@ -7,10 +7,12 @@ import { LogOut } from 'lucide-react';
 import { useAuth } from '../../auth/useAuth';
 import { Brand } from './Brand';
 import { visibleNavItems } from './navItems';
+import { useNotifications, badgeForRoute } from '../../hooks/useNotifications';
 import { cn } from '../../lib/utils';
 
 export function Sidebar() {
   const { user, logout } = useAuth();
+  const counts = useNotifications();
 
   return (
     <aside className="hidden md:flex md:w-60 md:shrink-0 md:flex-col md:border-r md:border-line md:bg-white">
@@ -26,6 +28,7 @@ export function Sidebar() {
         <ul className="space-y-0.5">
           {visibleNavItems(user?.role).map((item) => {
               const Icon = item.icon;
+              const badge = badgeForRoute(item.to, counts);
               return (
                 <li key={item.to}>
                   <NavLink
@@ -45,7 +48,12 @@ export function Sidebar() {
                           <span className="absolute -left-1 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-accent-700" aria-hidden />
                         )}
                         <Icon size={18} className={cn(isActive ? 'text-brand-700' : 'text-muted group-hover:text-ink')} />
-                        {item.label}
+                        <span className="flex-1">{item.label}</span>
+                        {badge > 0 && (
+                          <span className="grid min-w-[1.25rem] justify-items-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white" aria-label={`${badge} pending`}>
+                            {badge > 99 ? '99+' : badge}
+                          </span>
+                        )}
                       </>
                     )}
                   </NavLink>

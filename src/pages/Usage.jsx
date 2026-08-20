@@ -87,7 +87,7 @@ export default function Usage() {
   const [recordDate, setRecordDate] = useState(today);
 
   // `entries[tool_id]` holds a completed guided entry for this submission:
-  // { count, service_point_id, service_point_name, physical_balance, note }.
+  // { count, service_point_ids, service_point_other, service_point_label, physical_balance, note }.
   // Cleared after save (the saved total shows in the tracker columns).
   const [entries,    setEntries]    = useState({});
   const [wizardTool, setWizardTool] = useState(null);
@@ -174,11 +174,12 @@ export default function Usage() {
         const e = entries[t.tool_id];
         if (!e || e.count <= 0) return null;
         return {
-          tool_id:          t.tool_id,
-          count:            e.count,
-          note:             e.note,
-          service_point_id: e.service_point_id,
-          physical_balance: e.physical_balance,
+          tool_id:             t.tool_id,
+          count:               e.count,
+          note:                e.note,
+          service_point_ids:   e.service_point_ids,
+          service_point_other: e.service_point_other,
+          physical_balance:    e.physical_balance,
         };
       })
       .filter(Boolean);
@@ -357,7 +358,7 @@ export default function Usage() {
                       ) : entry ? (
                         <div className="flex items-center justify-between gap-3 rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2">
                           <p className="text-sm text-ink">
-                            Gave <span className="font-semibold num">{entry.count}</span> → <span className="font-semibold">{entry.service_point_name}</span>
+                            Gave <span className="font-semibold num">{entry.count}</span> → <span className="font-semibold">{entry.service_point_label}</span>
                             <span className="text-muted"> · physical balance {entry.physical_balance} ✓</span>
                           </p>
                           <div className="flex shrink-0 items-center gap-1">

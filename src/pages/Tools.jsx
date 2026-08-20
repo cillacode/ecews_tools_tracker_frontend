@@ -245,7 +245,7 @@ export default function Tools() {
     <div className="animate-fade-in">
       <PageHeader
         title={user?.role === 'super_admin' ? 'Tools Catalogue' : 'Tools'}
-        subtitle="The MER tools catalogue, grouped by thematic area."
+        subtitle="The program tools catalogue, grouped by thematic area."
       />
       <ToolsCatalogue />
     </div>

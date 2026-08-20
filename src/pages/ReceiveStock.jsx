@@ -138,6 +138,7 @@ function FacilityReceive() {
       qc.invalidateQueries({ queryKey: ['facility-stock'] });
       qc.invalidateQueries({ queryKey: ['movements'] });
       qc.invalidateQueries({ queryKey: ['state-stock'] });
+      qc.invalidateQueries({ queryKey: ['notification-summary'] });
 
       // Confirm exactly which facility the receipt was logged to —
       // important so the admin doesn't accidentally pick the wrong one.

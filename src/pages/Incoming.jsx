@@ -216,6 +216,7 @@ export default function Incoming() {
 
   function invalidateAll() {
     qc.invalidateQueries({ queryKey: ['incoming'] });
+    qc.invalidateQueries({ queryKey: ['notification-summary'] });
     qc.invalidateQueries({ queryKey: ['movements'] });
     qc.invalidateQueries({ queryKey: ['facility-kpis'] });
     qc.invalidateQueries({ queryKey: ['facility-recent'] });
